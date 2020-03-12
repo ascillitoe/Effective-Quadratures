@@ -61,7 +61,7 @@ class Poly(object):
         5. Bos, L., De Marchi, S., Sommariva, A., Vianello, M., (2010) Computing Multivariate Fekete and Leja points by Numerical Linear Algebra. SIAM Journal on Numerical Analysis, 48(5). `Paper <https://epubs.siam.org/doi/abs/10.1137/090779024>`__
         6. Joshi, S., Boyd, S., (2009) Sensor Selection via Convex Optimization. IEEE Transactions on Signal Processing, 57(2). `Paper <https://ieeexplore.ieee.org/document/4663892>`__
     """
-    def __init__(self, parameters, basis, method=None, sampling_args=None, solver_args=None):
+    def __init__(self, parameters, basis, method=None, sampling_args=None, solver_args=None, warning=True):
         try:
             len(parameters)
         except TypeError:
@@ -74,6 +74,7 @@ class Poly(object):
         self.dimensions = len(parameters)
         self.orders = []
         self.gradient_flag = 0
+        self.warning = warning
         for i in range(0, self.dimensions):
             self.orders.append(self.parameters[i].order)
         if not self.basis.orders :
@@ -126,7 +127,7 @@ class Poly(object):
             self._set_subsampling_algorithm()
             self._set_points_and_weights()
         else:
-            print('WARNING: Method not declared.')
+            if self.warning: print('WARNING: Method not declared.')
     def _set_parameters(self, parameters):
         """
         Private function that sets the parameters. Required by the Correlated class.
@@ -410,8 +411,9 @@ class Poly(object):
             return
         indices_with_nans = np.argwhere(np.isnan(self._model_evaluations))[:,0]
         if len(indices_with_nans) is not 0:
-            print('WARNING: One or more of your model evaluations have resulted in an NaN. We found '+str(len(indices_with_nans))+' NaNs out of '+str(len(self._model_evaluations))+'.')
-            print('The code will now use a least-squares technique that will ignore input-output pairs of your model that have NaNs. This will likely compromise computed statistics.')
+            if self.warning:
+                print('WARNING: One or more of your model evaluations have resulted in an NaN. We found '+str(len(indices_with_nans))+' NaNs out of '+str(len(self._model_evaluations))+'.')
+                print('The code will now use a least-squares technique that will ignore input-output pairs of your model that have NaNs. This will likely compromise computed statistics.')
             self.inputs = np.delete(self._quadrature_points, indices_with_nans, axis=0)
             self.outputs = np.delete(self._model_evaluations, indices_with_nans, axis=0)
             self.subsampling_algorithm_name = None
@@ -466,7 +468,7 @@ class Poly(object):
                 print('Gradient computation: The rank of the stacked matrix is '+str(r)+'.')
                 print('The number of unknown basis terms is '+str(n))
                 if n > r:
-                    print('WARNING: Please increase the number of samples; one way to do this would be to increase the sampling-ratio.')
+                    if self.warning: print('WARNING: Please increase the number of samples; one way to do this would be to increase the sampling-ratio.')
                 self.coefficients = self.solver(A, b, C, self._gradient_evaluations)
             else:
                 self.coefficients = self.solver(A, b)
@@ -768,6 +770,80 @@ class Poly(object):
                 H.append(polynomialhessian)
 
         return H
+    def get_data_variance(self,evalpts,order=60,cutoff=0.005):
+        """
+        Fits a kde to the data in order to quantify variance surrounding the poly fit.
+    
+        :param Poly self:
+            An instance of the Poly object.
+        :param numpy.ndarray evalpts:
+            An ndarray with shape (number_of_points, dimensions) at which the kde estimated mean and variance must be obtained.
+    
+        " return:
+            **mean**: A numpy.ndarray of estimated mean values  
+            **var**: A numpy.ndarray of estimated variance values  
+        """
+        # Check evalpts array
+        if isinstance(evalpts,float):
+            evalpts = np.array(evalpts)
+        if evalpts.ndim!=1:
+            raise ValueError('evalpts not 1D')
+        # Get input/output data
+        x = self.inputs
+        y = self.outputs
+        if(x.shape[1]!=1): 
+            raise ValueError('get_poly_variance() currently only works for 1D poly')
+
+        # Fit a 2d gaussian kde to data
+        ymin = np.min(y)
+        ymax = np.max(y)
+        values = np.vstack([x.squeeze(),y.squeeze()]) # 2xN matrix of X,Y values
+        kernel = st.gaussian_kde(values) #fit kde to values
+
+        # Loop through all x-coords in evalpts. At each point, use a poly to integrate marginal (wrt y), and calc mean and var of this.
+        marginal = lambda y: kernel.pdf(np.vstack([pt,y])).flatten()
+        density_times_y = lambda y: kernel.pdf(np.vstack([pt,y])).flatten() *  1.0/integral * y
+        density_times_y_minus_mean_squared = lambda y: kernel.pdf(np.vstack([pt,y])).flatten() * 1.0/integral * (y - mean)**2
+
+        param = Parameter(distribution='uniform',lower=ymin,upper=ymax,order=order)
+        basis = Basis('univariate')
+        poly = Poly(method='numerical-integration',parameters=param,basis=basis,warning=False)
+        mean_est = np.empty_like(evalpts)
+        var_est  = np.empty_like(evalpts)
+        for i, pt in enumerate(evalpts):
+            fail = False
+            try:
+                # Marginal wrt y
+                poly.set_model(marginal)
+                points,weights = poly.get_points_and_weights()
+                integral = float( (ymax-ymin) * np.dot(weights , evaluate_model(points, marginal) ) )
+
+                # Calculate mean of marginal distribution
+                poly.set_model(density_times_y)
+                points,weights = poly.get_points_and_weights()
+                mean = float( (ymax-ymin) * np.dot(weights , evaluate_model(points, density_times_y) ) )
+
+                # Calculate variance of marginal distribution
+                poly.set_model(density_times_y_minus_mean_squared)
+                points,weights = poly.get_points_and_weights()
+                var  = float( (ymax-ymin) * np.dot(weights , evaluate_model(points, density_times_y_minus_mean_squared) ) )
+
+                # If integral (likelihood) < cutoff we don't trust the kde so fail=True
+                if integral>=cutoff:
+                    mean_est[i] = mean
+                    var_est[i] = var
+                else:
+                    fail = True
+            except ValueError:
+                fail = True
+            # if KDE fails, set mean to poly and var to big number
+            if fail:
+                mean_est[i] = self.get_polyfit(pt.reshape(-1,1)) 
+                var_est[i] = (ymax-ymin)**2
+
+        # Also store evalpts, mean_est and var_est in poly object for access later
+        self.kde_data = np.vstack([evalpts,mean_est,var_est])
+        return mean_est, var_est
 def evaluate_model_gradients(points, fungrad, format):
     """
     Evaluates the model gradient at given values.
