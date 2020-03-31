@@ -770,7 +770,7 @@ class Poly(object):
                 H.append(polynomialhessian)
 
         return H
-    def get_data_variance(self,evalpts,order=60,cutoff=0.005):
+    def get_data_variance(self,evalpts,order=60,cutoff=0.005,debug=False):
         """
         Fits a kde to the data in order to quantify variance surrounding the poly fit.
     
@@ -801,33 +801,39 @@ class Poly(object):
         kernel = st.gaussian_kde(values) #fit kde to values
 
         # Loop through all x-coords in evalpts. At each point, use a poly to integrate marginal (wrt y), and calc mean and var of this.
-        marginal = lambda y: kernel.pdf(np.vstack([pt,y])).flatten()
-        density_times_y = lambda y: kernel.pdf(np.vstack([pt,y])).flatten() *  1.0/integral * y
-        density_times_y_minus_mean_squared = lambda y: kernel.pdf(np.vstack([pt,y])).flatten() * 1.0/integral * (y - mean)**2
-
+        marginal = lambda y: kernel.pdf(np.vstack([np.ones_like(y)*pt,y])).flatten()
+        density_times_y = lambda y: kernel.pdf(np.vstack([np.ones_like(y)*pt,y])).flatten() *  1.0/integral * y
+        density_times_y_minus_mean_squared = lambda y: kernel.pdf(np.vstack([np.ones_like(y)*pt,y])).flatten() * 1.0/integral * (y - mean)**2
+        
         param = Parameter(distribution='uniform',lower=ymin,upper=ymax,order=order)
         basis = Basis('univariate')
         poly = Poly(method='numerical-integration',parameters=param,basis=basis,warning=False)
+        points,weights = poly.get_points_and_weights()
+        points = points.squeeze()
+        weights = weights.squeeze()
+
         mean_est = np.empty_like(evalpts)
         var_est  = np.empty_like(evalpts)
+        if debug: 
+            debug_arr = np.empty([len(evalpts),order+1,2])
+            like = np.empty_like(evalpts)
         for i, pt in enumerate(evalpts):
             fail = False
             try:
-                # Marginal wrt y
-                poly.set_model(marginal)
-                points,weights = poly.get_points_and_weights()
-                integral = float( (ymax-ymin) * np.dot(weights , evaluate_model(points, marginal) ) )
+            # Marginal wrt y
+                integral = float( (ymax-ymin) * np.dot(weights , marginal(points) ) )
 
+                if debug:
+                    debug_arr[i,:,0] = points.squeeze()
+                    debug_arr[i,:,1] = (marginal(points)/integral).squeeze()
+                    like[i] = integral
+    
                 # Calculate mean of marginal distribution
-                poly.set_model(density_times_y)
-                points,weights = poly.get_points_and_weights()
-                mean = float( (ymax-ymin) * np.dot(weights , evaluate_model(points, density_times_y) ) )
+                mean = float( (ymax-ymin) * np.dot(weights , density_times_y(points)) )
 
                 # Calculate variance of marginal distribution
-                poly.set_model(density_times_y_minus_mean_squared)
-                points,weights = poly.get_points_and_weights()
-                var  = float( (ymax-ymin) * np.dot(weights , evaluate_model(points, density_times_y_minus_mean_squared) ) )
-
+                var  = float( (ymax-ymin) * np.dot(weights , density_times_y_minus_mean_squared(points) ) )
+   
                 # If integral (likelihood) < cutoff we don't trust the kde so fail=True
                 if integral>=cutoff:
                     mean_est[i] = mean
@@ -843,7 +849,11 @@ class Poly(object):
 
         # Also store evalpts, mean_est and var_est in poly object for access later
         self.kde_data = np.vstack([evalpts,mean_est,var_est])
+        if debug: 
+            self.kde_debug = debug_arr
+            self.kde_like  = like
         return mean_est, var_est
+
 def evaluate_model_gradients(points, fungrad, format):
     """
     Evaluates the model gradient at given values.
