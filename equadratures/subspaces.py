@@ -207,7 +207,7 @@ class Subspaces(object):
         eta = 2 * np.divide((y - minmax[0,:]), (minmax[1,:]-minmax[0,:])) - 1
 
         #Construct the _vandermonde matrix step 6
-        V,Polybasis=vandermonde(eta, self.polynomial_degree)
+        V,Polybasis=self._vandermonde(eta)
         V_plus=np.linalg.pinv(V)
         coeff=np.dot(V_plus, self.sample_outputs)
         res= self.sample_outputs - np.dot(V,coeff)
@@ -260,7 +260,7 @@ class Subspaces(object):
                 minmax[1,:] = np.amax(y, axis=0)
                 eta = 2 * np.divide((y - minmax[0,:]), (minmax[1,:]-minmax[0,:])) - 1
 
-                V_new,Polybasis=vandermonde(eta, self.polynomial_degree)
+                V_new,Polybasis=self._vandermonde(eta)
                 V_plus_new=np.linalg.pinv(V_new)
                 coeff_new=np.dot(V_plus_new, self.sample_outputs)
                 res_new= self.sample_outputs  -  np.dot(V_new,coeff_new)
@@ -455,6 +455,23 @@ class Subspaces(object):
 
         yz = np.vstack([np.repeat(y[:, np.newaxis], N, axis=1), Z.T])
         return np.dot(self._subspace, yz).T
+    def _vandermonde(self,eta):
+        p = self.polynomial_degree
+        _,n=eta.shape
+        listing=[]
+        for i in range(0,n):
+            listing.append(p)
+        Object=Basis('total-order',listing)
+        #Establish n Parameter objects
+        params=[]
+        P=Parameter(order=p,lower=-1,upper=1,distribution='uniform')
+        for i in range(0,n):
+            params.append(P)
+        #Use the params list to establish the Poly object
+        Polybasis=Poly(params,Object, method=self.poly_method)
+        V=Polybasis.get_poly(eta)
+        V=V.T
+        return V,Polybasis
 def vector_AS(list_of_polys, R = None, alpha=None, k=None, samples=None, bootstrap=False, bs_trials = 50
                 , J = None, save_path = None):
     # Find AS directions to vector val func
@@ -518,22 +535,6 @@ def vector_AS(list_of_polys, R = None, alpha=None, k=None, samples=None, bootstr
         return eigs,eigVecs,eigs_bs_lower,eigs_bs_upper, all_bs_W
     else:
         return eigs,eigVecs
-def vandermonde(eta,p):
-    _,n=eta.shape
-    listing=[]
-    for i in range(0,n):
-        listing.append(p)
-    Object=Basis('total-order',listing)
-    #Establish n Parameter objects
-    params=[]
-    P=Parameter(order=p,lower=-1,upper=1,distribution='uniform')
-    for i in range(0,n):
-        params.append(P)
-    #Use the params list to establish the Poly object
-    Polybasis=Poly(params,Object, method='least-squares')
-    V=Polybasis.get_poly(eta)
-    V=V.T
-    return V,Polybasis
 def jacobian_vp(V,V_plus,U,y,f,Polybasis,eta,minmax,X):
     M,N=V.shape
     m,n=U.shape
