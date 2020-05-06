@@ -771,7 +771,7 @@ class Poly(object):
                 H.append(polynomialhessian)
 
         return H
-    def get_data_variance(self,evalpts,order=60,cutoff=0.005,debug=False):
+    def get_data_variance(self,evalpts,order=60,cutoff=None,debug=False):
         """
         Fits a kde to the data in order to quantify variance surrounding the poly fit.
     
@@ -793,7 +793,7 @@ class Poly(object):
         x = self.inputs
         y = self.outputs
         if(x.shape[1]!=1): 
-            raise ValueError('get_poly_variance() currently only works for 1D poly')
+            raise ValueError('get_data_variance() currently only works for 1D poly')
 
         # Fit a 2d gaussian kde to data
         ymin = np.min(y)
@@ -815,44 +815,45 @@ class Poly(object):
 
         mean_est = np.empty_like(evalpts)
         var_est  = np.empty_like(evalpts)
+        like     = np.empty_like(evalpts)
         if debug: 
             debug_arr = np.empty([len(evalpts),order+1,2])
-            like = np.empty_like(evalpts)
         for i, pt in enumerate(evalpts):
             fail = False
             try:
             # Marginal wrt y
                 integral = float( (ymax-ymin) * np.dot(weights , marginal(points) ) )
-
                 if debug:
                     debug_arr[i,:,0] = points.squeeze()
                     debug_arr[i,:,1] = (marginal(points)/integral).squeeze()
-                    like[i] = integral
-    
+               
                 # Calculate mean of marginal distribution
                 mean = float( (ymax-ymin) * np.dot(weights , density_times_y(points)) )
 
                 # Calculate variance of marginal distribution
                 var  = float( (ymax-ymin) * np.dot(weights , density_times_y_minus_mean_squared(points) ) )
-   
+
+                # Store data
+                mean_est[i] = mean
+                var_est[i] = var
+                like[i] = integral
+
                 # If integral (likelihood) < cutoff we don't trust the kde so fail=True
-                if integral>=cutoff:
-                    mean_est[i] = mean
-                    var_est[i] = var
-                else:
-                    fail = True
+                if cutoff is not None: 
+                    if integral<cutoff: fail = True
+
             except ValueError:
                 fail = True
             # if KDE fails, set mean to poly and var to big number
             if fail:
                 mean_est[i] = self.get_polyfit(pt.reshape(-1,1)) 
                 var_est[i] = (ymax-ymin)**2
+                like[i] = 0.0
 
         # Also store evalpts, mean_est and var_est in poly object for access later
-        self.kde_data = np.vstack([evalpts,mean_est,var_est])
+        self.kde_data = np.vstack([evalpts,mean_est,var_est,like])
         if debug: 
             self.kde_debug = debug_arr
-            self.kde_like  = like
         return mean_est, var_est
 
 def evaluate_model_gradients(points, fungrad, format):
