@@ -474,7 +474,7 @@ def vector_AS(list_of_polys, R = None, alpha=None, k=None, samples=None, bootstr
         M = int(alpha * k * np.log(d))
         X = np.zeros((M, d))
         for j in range(0, d):
-            X[:, j] = np.reshape(poly.parameters[j].getSamples(M), M)
+            X[:, j] = np.reshape(poly.parameters[j].get_samples(M), M)
     else:
         X = samples
         M, d = X.shape
